@@ -15,6 +15,8 @@ public class PublicKeyProvider {
 
     private final WebClient webClient;
     private volatile PublicKey publicKey;
+    private volatile long lastFetchTime = 0;
+    private static final long CACHE_DURATION_MS = 60000; // 1 minute cache
 
     public PublicKeyProvider(WebClient.Builder builder) {
         this.webClient = builder
@@ -23,10 +25,14 @@ public class PublicKeyProvider {
     }
 
     public PublicKey getPublicKey() {
-        if (publicKey == null) {
+        long currentTime = System.currentTimeMillis();
+        
+        // Refresh if cache expired or key is null
+        if (publicKey == null || (currentTime - lastFetchTime) > CACHE_DURATION_MS) {
             synchronized (this) {
-                if (publicKey == null) {
+                if (publicKey == null || (currentTime - lastFetchTime) > CACHE_DURATION_MS) {
                     publicKey = fetchPublicKey();
+                    lastFetchTime = currentTime;
                 }
             }
         }
@@ -34,13 +40,13 @@ public class PublicKeyProvider {
     }
 
     private PublicKey fetchPublicKey() {
-        PublicKeyResponse response = webClient.get()
-                .uri("/auth/public-key")
-                .retrieve()
-                .bodyToMono(PublicKeyResponse.class)
-                .block();
-
         try {
+            PublicKeyResponse response = webClient.get()
+                    .uri("/auth/public-key")
+                    .retrieve()
+                    .bodyToMono(PublicKeyResponse.class)
+                    .block();
+
             byte[] decoded = Base64.getDecoder().decode(response.getKey());
             X509EncodedKeySpec spec = new X509EncodedKeySpec(decoded);
             return KeyFactory
@@ -48,6 +54,14 @@ public class PublicKeyProvider {
                     .generatePublic(spec);
         } catch (Exception e) {
             throw new IllegalStateException("Failed to build public key", e);
+        }
+    }
+    
+    // Method to force refresh (useful for testing or manual refresh)
+    public void refreshKey() {
+        synchronized (this) {
+            publicKey = fetchPublicKey();
+            lastFetchTime = System.currentTimeMillis();
         }
     }
 }

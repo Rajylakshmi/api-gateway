@@ -55,13 +55,23 @@ public class JwtAuthFilter implements GlobalFilter, Ordered {
         String token = authHeader.substring(7);
 
         try {
+            // First attempt with cached key
             Jwts.parserBuilder()
                     .setSigningKey(keyProvider.getPublicKey())
                     .build()
                     .parseClaimsJws(token);
         } catch (Exception ex) {
-            exchange.getResponse().setStatusCode(HttpStatus.UNAUTHORIZED);
-            return exchange.getResponse().setComplete();
+            // Retry once with refreshed key (in case auth-service restarted)
+            try {
+                keyProvider.refreshKey();
+                Jwts.parserBuilder()
+                        .setSigningKey(keyProvider.getPublicKey())
+                        .build()
+                        .parseClaimsJws(token);
+            } catch (Exception retryEx) {
+                exchange.getResponse().setStatusCode(HttpStatus.UNAUTHORIZED);
+                return exchange.getResponse().setComplete();
+            }
         }
 
         return chain.filter(exchange);
