@@ -10,6 +10,8 @@ import org.springframework.web.reactive.function.client.WebClient;
 
 import com.ecommerce.gateway.dto.PublicKeyResponse;
 
+import reactor.core.publisher.Mono;
+
 @Component
 public class PublicKeyProvider {
 
@@ -24,44 +26,59 @@ public class PublicKeyProvider {
                 .build();
     }
 
-    public PublicKey getPublicKey() {
+    /**
+     * Get public key reactively. Returns cached key if valid, otherwise fetches new one.
+     */
+    public Mono<PublicKey> getPublicKey() {
         long currentTime = System.currentTimeMillis();
         
-        // Refresh if cache expired or key is null
-        if (publicKey == null || (currentTime - lastFetchTime) > CACHE_DURATION_MS) {
-            synchronized (this) {
-                if (publicKey == null || (currentTime - lastFetchTime) > CACHE_DURATION_MS) {
-                    publicKey = fetchPublicKey();
-                    lastFetchTime = currentTime;
-                }
-            }
+        // Return cached key if still valid
+        if (publicKey != null && (currentTime - lastFetchTime) <= CACHE_DURATION_MS) {
+            return Mono.just(publicKey);
         }
-        return publicKey;
+        
+        // Fetch new key reactively
+        return fetchPublicKey()
+                .doOnNext(key -> {
+                    this.publicKey = key;
+                    this.lastFetchTime = System.currentTimeMillis();
+                });
     }
 
-    private PublicKey fetchPublicKey() {
-        try {
-            PublicKeyResponse response = webClient.get()
-                    .uri("/auth/public-key")
-                    .retrieve()
-                    .bodyToMono(PublicKeyResponse.class)
-                    .block();
-
-            byte[] decoded = Base64.getDecoder().decode(response.getKey());
-            X509EncodedKeySpec spec = new X509EncodedKeySpec(decoded);
-            return KeyFactory
-                    .getInstance(response.getAlgorithm())
-                    .generatePublic(spec);
-        } catch (Exception e) {
-            throw new IllegalStateException("Failed to build public key", e);
-        }
+    /**
+     * Force refresh the public key (useful for retry logic)
+     */
+    public Mono<PublicKey> refreshKey() {
+        return fetchPublicKey()
+                .doOnNext(key -> {
+                    this.publicKey = key;
+                    this.lastFetchTime = System.currentTimeMillis();
+                });
     }
-    
-    // Method to force refresh (useful for testing or manual refresh)
-    public void refreshKey() {
-        synchronized (this) {
-            publicKey = fetchPublicKey();
-            lastFetchTime = System.currentTimeMillis();
-        }
+
+    /**
+     * Fetch public key from auth service reactively
+     */
+    private Mono<PublicKey> fetchPublicKey() {
+        return webClient.get()
+                .uri("/auth/public-key")
+                .retrieve()
+                .bodyToMono(PublicKeyResponse.class)
+                .map(response -> {
+                    try {
+                        String algorithm = response.algorithm();
+                        String keyStr = response.key();
+                        
+                        byte[] decoded = Base64.getDecoder().decode(keyStr);
+                        X509EncodedKeySpec spec = new X509EncodedKeySpec(decoded);
+                        PublicKey key = KeyFactory
+                                .getInstance(algorithm)
+                                .generatePublic(spec);
+                        
+                        return key;
+                    } catch (Exception e) {
+                        throw new IllegalStateException("Failed to build public key", e);
+                    }
+                });
     }
 }

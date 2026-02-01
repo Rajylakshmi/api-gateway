@@ -1,5 +1,6 @@
 package com.ecommerce.gateway.security;
 
+import java.security.PublicKey;
 import java.util.List;
 
 import org.springframework.cloud.gateway.filter.GatewayFilterChain;
@@ -54,27 +55,47 @@ public class JwtAuthFilter implements GlobalFilter, Ordered {
 
         String token = authHeader.substring(7);
 
-        try {
-            // First attempt with cached key
-            Jwts.parserBuilder()
-                    .setSigningKey(keyProvider.getPublicKey())
-                    .build()
-                    .parseClaimsJws(token);
-        } catch (Exception ex) {
-            // Retry once with refreshed key (in case auth-service restarted)
+        // Validate JWT reactively
+        return keyProvider.getPublicKey()
+                .flatMap(publicKey -> validateToken(token, publicKey))
+                .flatMap(isValid -> {
+                    if (isValid) {
+                        return chain.filter(exchange);
+                    } else {
+                        // First validation failed, try refreshing the key
+                        return keyProvider.refreshKey()
+                                .flatMap(refreshedKey -> validateToken(token, refreshedKey))
+                                .flatMap(retryValid -> {
+                                    if (retryValid) {
+                                        return chain.filter(exchange);
+                                    } else {
+                                        exchange.getResponse().setStatusCode(HttpStatus.UNAUTHORIZED);
+                                        return exchange.getResponse().setComplete();
+                                    }
+                                });
+                    }
+                })
+                .onErrorResume(e -> {
+                    exchange.getResponse().setStatusCode(HttpStatus.UNAUTHORIZED);
+                    return exchange.getResponse().setComplete();
+                });
+    }
+
+    /**
+     * Validate JWT token with given public key
+     */
+    private Mono<Boolean> validateToken(String token, PublicKey publicKey) {
+        return Mono.fromCallable(() -> {
             try {
-                keyProvider.refreshKey();
                 Jwts.parserBuilder()
-                        .setSigningKey(keyProvider.getPublicKey())
+                        .setSigningKey(publicKey)
                         .build()
                         .parseClaimsJws(token);
-            } catch (Exception retryEx) {
-                exchange.getResponse().setStatusCode(HttpStatus.UNAUTHORIZED);
-                return exchange.getResponse().setComplete();
+                return true;
+            } catch (Exception e) {
+                return false;
             }
-        }
-
-        return chain.filter(exchange);
+        });
     }
 
     /**
