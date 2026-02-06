@@ -2,18 +2,93 @@ server:
   port: 8080
 
 spring:
+  application:
+    name: api-gateway
+  config:
+    import: optional:configserver:http://configuser:configpass123@localhost:8888
   cloud:
     gateway:
       routes:
         - id: auth-service
-          uri: http://localhost:8081
+          uri: lb://auth-service
           predicates:
             - Path=/auth/**
+          filters:
+            - name: CircuitBreaker
+              args:
+                name: auth-service
+                fallbackUri: forward:/fallback/auth
         - id: user-service
-          uri: http://localhost:8082
+          uri: lb://user-service
           predicates:
             - Path=/users/**
+          filters:
+            - name: CircuitBreaker
+              args:
+                name: user-service
+                fallbackUri: forward:/fallback/users
+        - id: product-service
+          uri: lb://product-service
+          predicates:
+            - Path=/products/**
+          filters:
+            - name: CircuitBreaker
+              args:
+                name: product-service
+                fallbackUri: forward:/fallback/products
+        - id: cart-service
+          uri: lb://cart-service
+          predicates:
+            - Path=/cart/**
+          filters:
+            - name: CircuitBreaker
+              args:
+                name: cart-service
+                fallbackUri: forward:/fallback/cart
+        - id: order-service
+          uri: lb://order-service
+          predicates:
+            - Path=/orders/**
+          filters:
+            - name: CircuitBreaker
+              args:
+                name: order-service
+                fallbackUri: forward:/fallback/orders
+        - id: payment-service
+          uri: lb://payment-service
+          predicates:
+            - Path=/payments/**
+          filters:
+            - name: CircuitBreaker
+              args:
+                name: payment-service
+                fallbackUri: forward:/fallback/payments
+      discovery:
+        locator:
+          enabled: true
+          lower-case-service-id: true
+
+eureka:
+  client:
+    service-url:
+      defaultZone: http://admin:admin123@localhost:8761/eureka/
+    register-with-eureka: true
+    fetch-registry: true
+  instance:
+    prefer-ip-address: true
+    instance-id: ${spring.application.name}:${spring.application.instance_id:${random.value}}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,circuitbreakers
+  endpoint:
+    health:
+      show-details: always
+
 logging:
   level:
     org.springframework.security: DEBUG
     org.springframework.cloud.gateway: DEBUG
+    com.ecommerce.gateway: DEBUG
